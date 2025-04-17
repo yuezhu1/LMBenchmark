@@ -28,3 +28,17 @@ Each filtered user will submit their questions in turn. Modify the `QPS` in `run
 > ```
 
 > **Note**: The warm‑up phase of the benchmark exists solely to preload the first xxx rounds (determined by `-s` in Step 1) of all users.
+
+## Processing results
+
+To get the average TTFT:
+
+```bash
+python3 ../synthetic-multi-round-qa/multi-round-qa.py --process-summary <YOUR CSV>
+```
+
+To get the average ITL, change the file name in `./synthetic-multi-round-qa/calculat_itl.py` and run:
+
+```bash
+python3 ./synthetic-multi-round-qa/calculat_itl.py
+```
