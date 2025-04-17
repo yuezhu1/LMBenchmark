@@ -39,7 +39,7 @@ KEY=$3
 QPS_VALUES=(0.1) # Set your QPS values here
 
 # Run benchmarks for different QPS values
-for qps in 0.1; do
+for qps in "${QPS_VALUES[@]}"; do
     output_file="${KEY}_output_${qps}.csv"
     run_benchmark "$qps" "$output_file"
 done
