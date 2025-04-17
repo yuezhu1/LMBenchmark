@@ -42,7 +42,7 @@ bash long_input_short_output_run.sh meta-llama/Llama-3.1-8B-Instruct http://loca
 > kubectl port-forward svc/vllm-router-service 30080:80
 > ```
 
-> **Note**: The warm‑up phase of both benchmarks exists solely to preload the **context** of all users in the tested session.
+> **Note**: The warm‑up phase of both benchmarks exists solely to preload the **user-specific chatting history** of all users in the tested session.
 
 ## Processing results
 
