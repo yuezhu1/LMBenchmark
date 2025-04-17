@@ -43,3 +43,17 @@ bash long_input_short_output_run.sh meta-llama/Llama-3.1-8B-Instruct http://loca
 > ```
 
 > **Note**: The warm‑up phase of both benchmarks exists solely to preload the **context** of all users in the tested session.
+
+## Processing results
+
+To get the average TTFT:
+
+```bash
+python3 multi-round-qa.py --process-summary <YOUR CSV>
+```
+
+To get the average ITL, change the file name in `calculat_itl.py` and run:
+
+```bash
+python3 calculat_itl.py
+```
