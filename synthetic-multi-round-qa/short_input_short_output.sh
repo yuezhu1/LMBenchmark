@@ -41,7 +41,8 @@ run_benchmark() {
         --qps "$qps" \
         --model "$MODEL" \
         --base-url "$BASE_URL" \
-        --output "$output_file"
+        --output "$output_file" \
+        --time 60
 }
 
 # Run benchmarks for each QPS value

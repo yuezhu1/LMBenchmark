@@ -430,6 +430,8 @@ class UserSessionManager:
         self.need_ramp_up = False
 
     def _create_user_session(self):
+        if len(self.sessions) >= self.workload_config.num_users:
+            return None
         self.user_id += 1
         user_config = UserConfig.new_user_config(self.user_id, self.workload_config)
         if self.use_sharegpt:
@@ -460,12 +462,13 @@ class UserSessionManager:
             self.start_time = timestamp
 
         if timestamp - self.last_user_join > self.gap_between_users:
-            self._create_user_session()
-            self.last_user_join = timestamp
-            logger.info(
-                f"Joined a new user {self.user_id}, "
-                f"now active users: {len(self.sessions)}"
-            )
+            new_session = self._create_user_session()
+            if new_session is not None:
+                self.last_user_join = timestamp
+                logger.info(
+                    f"Joined a new user {self.user_id}, "
+                    f"now active users: {len(self.sessions)}"
+                )
 
         for session in self.sessions:
             session.step(timestamp, executor)
