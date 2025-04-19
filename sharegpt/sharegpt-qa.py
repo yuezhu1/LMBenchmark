@@ -44,6 +44,8 @@ def parse_args() -> argparse.Namespace:
                         help="Output CSV filename (default: %(default)s)")
     parser.add_argument("--log-interval", type=int, default=30,
                         help="Seconds between progress logs (default: %(default)s)")
+    parser.add_argument("--time", type=int,
+                        help="Maximum time to run the benchmark in seconds")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable DEBUG logging")
     return parser.parse_args()
@@ -185,20 +187,32 @@ def log_summary(df: pd.DataFrame):
 def main():
     args = parse_args()
     if args.verbose:
-        init_logger(__name__, logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
 
-    with open(args.sharegpt_file, "r", encoding="utf-8") as fp:
-        data = json.load(fp)
-    logger.info("Loaded %d ShareGPT entries", len(data))
+    # Load prompts
+    with open(args.sharegpt_file, "r") as f:
+        prompts = json.load(f)
+    logger.info(f"Loaded {len(prompts)} ShareGPT entries")
 
-    executor = RequestExecutor(base_url=args.base_url, api_key="EMPTY", model=args.model)
-    df = BenchmarkRunner(data, executor, args.qps).run()
+    # Initialize executor
+    executor = RequestExecutor(args.base_url, "EMPTY", args.model)
 
+    # Run benchmark
+    runner = BenchmarkRunner(prompts, executor, args.qps)
+    start_time = time.time()
+    df = runner.run()
+    
+    # Check if we've exceeded the time limit
+    if args.time is not None and time.time() - start_time > args.time:
+        logger.info(f"Time limit of {args.time} seconds reached, stopping benchmark")
+        AsyncLoopWrapper.StopLoop()
+    
+    # Write results
     df.to_csv(args.output, index=False)
-    logger.info("Results written to %s", args.output)
-    log_summary(df)
+    logger.info(f"Results written to {args.output}")
 
-    AsyncLoopWrapper.StopLoop()  # ensure script terminates
+    # Log summary
+    log_summary(df)
 
 if __name__ == "__main__":
     main()
