@@ -1,69 +1,50 @@
 #!/bin/bash
 
-if [[ $# -ne 3 ]]; then
-    echo "Usage: $0 <model> <base url> <save file key>"
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+if [[ $# -lt 3 ]]; then
+    echo "Usage: $0 <model> <base url> <save file key> [qps_values...]"
+    echo "Example: $0 meta-llama/Llama-3.1-8B-Instruct http://localhost:8000 test 15 20 25"
     exit 1
 fi
 
 MODEL=$1
 BASE_URL=$2
-# Warmup: precompute KV and store inside CPU mem
-# CONFIGURATION
-NUM_USERS_WARMUP=400
-NUM_USERS=320
-NUM_ROUNDS=20
-
-SYSTEM_PROMPT=0 # Shared system prompt length
-CHAT_HISTORY=256 # User specific chat history length
-ANSWER_LEN=20 # Generation length per round
-
-warmup() {
-    # Warm up the vLLM with a lot of user queries
-    python3 ./multi-round-qa.py \
-        --num-users 1 \
-        --num-rounds 2 \
-        --qps 2 \
-        --shared-system-prompt $SYSTEM_PROMPT \
-        --user-history-prompt $CHAT_HISTORY \
-        --answer-len $ANSWER_LEN \
-        --model "$MODEL" \
-        --base-url "$BASE_URL" \
-        --output /tmp/warmup.csv \
-        --log-interval 30 \
-        --time $((NUM_USERS_WARMUP / 2))
-}
-
-run_benchmark() {
-
-    warmup
-
-    # $1: qps
-    # $2: output file
-
-    # Real run
-    python3 ./multi-round-qa.py \
-        --num-users $NUM_USERS \
-        --num-rounds $NUM_ROUNDS \
-        --qps "$1" \
-        --shared-system-prompt "$SYSTEM_PROMPT" \
-        --user-history-prompt "$CHAT_HISTORY" \
-        --answer-len $ANSWER_LEN \
-        --model "$MODEL" \
-        --base-url "$BASE_URL" \
-        --output "$2" \
-        --log-interval 30 \
-        --time 100
-
-    sleep 10
-}
-
 KEY=$3
 
-# Run benchmarks for different QPS values
-QPS_VALUES=(15) # Set your QPS values here
+# Configuration
+NUM_USERS=10
+NUM_ROUNDS=5
+SYSTEM_PROMPT="You are a helpful assistant."
+CHAT_HISTORY=""
+ANSWER_LEN=100
 
-# Run benchmarks for the determined QPS values
+# If QPS values are provided, use them; otherwise use default
+if [ $# -gt 3 ]; then
+    QPS_VALUES=("${@:4}")
+else
+    QPS_VALUES=(15)  # Default QPS value
+fi
+
+run_benchmark() {
+    local qps=$1
+    local output_file="${KEY}_qps${qps}.csv"
+    
+    echo "Running benchmark with QPS=$qps..."
+    python3 "${SCRIPT_DIR}/multi-round-qa.py" \
+        --num-users "$NUM_USERS" \
+        --shared-system-prompt "$(echo -n "$SYSTEM_PROMPT" | wc -w)" \
+        --user-history-prompt "$(echo -n "$CHAT_HISTORY" | wc -w)" \
+        --answer-len "$ANSWER_LEN" \
+        --num-rounds "$NUM_ROUNDS" \
+        --qps "$qps" \
+        --model "$MODEL" \
+        --base-url "$BASE_URL" \
+        --output "$output_file"
+}
+
+# Run benchmarks for each QPS value
 for qps in "${QPS_VALUES[@]}"; do
-    output_file="${KEY}_output_${qps}.csv"
-    run_benchmark "$qps" "$output_file"
+    run_benchmark "$qps"
 done

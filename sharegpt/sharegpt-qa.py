@@ -67,6 +67,9 @@ class RequestExecutor:
     """Thin wrapper over OpenAI async client that measures latency."""
 
     def __init__(self, base_url: str, api_key: str, model: str):
+        # Ensure base_url ends with /v1 for vLLM
+        if not base_url.endswith('/v1'):
+            base_url = base_url.rstrip('/') + '/v1'
         self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.loop = AsyncLoopWrapper.GetOrStartLoop()
@@ -76,34 +79,38 @@ class RequestExecutor:
         first_token: Optional[float] = None
         body = ""
 
-        stream = await self.client.chat.completions.create(
-            messages=messages,
-            model=self.model,
-            temperature=0,
-            stream=True,
-            max_tokens=max_tokens,
-            stream_options={"include_usage": True},
-        )
+        try:
+            stream = await self.client.chat.completions.create(
+                messages=messages,
+                model=self.model,
+                temperature=0,
+                stream=True,
+                max_tokens=max_tokens,
+                stream_options={"include_usage": True},
+            )
 
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta.content
-            if delta:
-                if first_token is None:
-                    first_token = time.time()
-                body += delta
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    if first_token is None:
+                        first_token = time.time()
+                    body += delta
 
-        usage = chunk.usage  # type: ignore[attr-defined]
-        return Response(
-            body=body,
-            ttft=(first_token or time.time()) - start,
-            generation_time=time.time() - (first_token or start),
-            prompt_tokens=usage.prompt_tokens,
-            generation_tokens=usage.completion_tokens,
-            launch_time=start,
-            finish_time=time.time(),
-        )
+            usage = chunk.usage  # type: ignore[attr-defined]
+            return Response(
+                body=body,
+                ttft=(first_token or time.time()) - start,
+                generation_time=time.time() - (first_token or start),
+                prompt_tokens=usage.prompt_tokens,
+                generation_tokens=usage.completion_tokens,
+                launch_time=start,
+                finish_time=time.time(),
+            )
+        except Exception as e:
+            logger.error(f"Error in request: {str(e)}")
+            raise
 
     def launch_request(self, prompt: str, max_tokens: int, on_finish) -> None:
         messages = [{"role": "user", "content": prompt}]
