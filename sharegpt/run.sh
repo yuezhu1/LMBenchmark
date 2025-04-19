@@ -48,6 +48,7 @@ run_benchmark() {
         --base-url "$BASE_URL" \
         --output "$2" \
         --log-interval 30 \
+        --time 100 \
         --sharegpt-file "${SCRIPT_DIR}/run.json"
 
     sleep 10
