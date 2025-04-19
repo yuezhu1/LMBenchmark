@@ -195,24 +195,29 @@ def main():
     if args.verbose:
         logger.setLevel(logging.DEBUG)
 
-    # Load prompts
-    with open(args.sharegpt_file, "r") as f:
-        prompts = json.load(f)
-    logger.info(f"Loaded {len(prompts)} ShareGPT entries")
+    try:
+        # Load prompts
+        with open(args.sharegpt_file, "r") as f:
+            prompts = json.load(f)
+        logger.info(f"Loaded {len(prompts)} ShareGPT entries")
 
-    # Initialize executor
-    executor = RequestExecutor(args.base_url, "EMPTY", args.model)
+        # Initialize executor
+        executor = RequestExecutor(args.base_url, "EMPTY", args.model)
 
-    # Run benchmark
-    runner = BenchmarkRunner(prompts, executor, args.qps, args.time)
-    df = runner.run()
-    
-    # Write results
-    df.to_csv(args.output, index=False)
-    logger.info(f"Results written to {args.output}")
+        # Run benchmark
+        runner = BenchmarkRunner(prompts, executor, args.qps, args.time)
+        df = runner.run()
+        
+        # Write results
+        df.to_csv(args.output, index=False)
+        logger.info(f"Results written to {args.output}")
 
-    # Log summary
-    log_summary(df)
+        # Log summary
+        log_summary(df)
+    finally:
+        # Always stop the asyncio loop
+        AsyncLoopWrapper.StopLoop()
+        logger.info("Benchmark completed and asyncio loop stopped")
 
 if __name__ == "__main__":
     main()
