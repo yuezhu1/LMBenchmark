@@ -9,6 +9,7 @@ on:
 env:
   REGISTRY: docker.io
   IMAGE_NAME: lmcache/lmcache-benchmark
+  CACHE_IMAGE: ghcr.io/lmcache/lmcache-benchmark
 
 jobs:
   build-and-push:
@@ -54,5 +55,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/lmcache-benchmark:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}/lmcache-benchmark:buildcache,mode=max 
+          cache-from: type=registry,ref=${{ env.CACHE_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.CACHE_IMAGE }}:buildcache,mode=max 
