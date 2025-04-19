@@ -127,22 +127,28 @@ class RequestExecutor:
 class BenchmarkRunner:
     """Dispatch prompts at desired QPS and collect latency metrics."""
 
-    def __init__(self, prompts: List[dict], executor: RequestExecutor, qps: float):
+    def __init__(self, prompts: List[dict], executor: RequestExecutor, qps: float, time_limit: Optional[int] = None):
         self.prompts = prompts
         self.executor = executor
         self.qps = qps
+        self.time_limit = time_limit
         self.results: List[Response] = []
         self._next_idx = 0
+        self.start_time = time.time()
 
     def _on_finish(self, resp: Response):
         self.results.append(resp)
 
     def run(self) -> pd.DataFrame:
-        start = time.time()
         logger.info("Benchmark started: %d prompts at %.2f QPS", len(self.prompts), self.qps)
 
         while self._next_idx < len(self.prompts):
-            scheduled = start + self._next_idx / self.qps
+            # Check time limit
+            if self.time_limit is not None and time.time() - self.start_time > self.time_limit:
+                logger.info(f"Time limit of {self.time_limit} seconds reached, stopping benchmark")
+                break
+
+            scheduled = self.start_time + self._next_idx / self.qps
             if time.time() < scheduled:
                 time.sleep(0.001)
                 continue
@@ -198,14 +204,8 @@ def main():
     executor = RequestExecutor(args.base_url, "EMPTY", args.model)
 
     # Run benchmark
-    runner = BenchmarkRunner(prompts, executor, args.qps)
-    start_time = time.time()
+    runner = BenchmarkRunner(prompts, executor, args.qps, args.time)
     df = runner.run()
-    
-    # Check if we've exceeded the time limit
-    if args.time is not None and time.time() - start_time > args.time:
-        logger.info(f"Time limit of {args.time} seconds reached, stopping benchmark")
-        AsyncLoopWrapper.StopLoop()
     
     # Write results
     df.to_csv(args.output, index=False)
