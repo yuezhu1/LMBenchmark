@@ -56,10 +56,6 @@ Results are saved in CSV format with the following naming convention:
 
 ### Time To First Token (TTFT)
 ```bash
-# For ShareGPT results
-python3 sharegpt/sharegpt-qa.py --process-summary <your_csv_file>
-
-# For synthetic benchmarks
 python3 synthetic-multi-round-qa/multi-round-qa.py --process-summary <your_csv_file>
 ```
 
