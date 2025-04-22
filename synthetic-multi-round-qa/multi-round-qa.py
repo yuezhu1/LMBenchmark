@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict
 
 import openai
 import pandas as pd
@@ -116,47 +116,91 @@ class Response:
 
 class RequestExecutor:
 
-    def __init__(self, base_url: str, api_key: str, model: str):
-        self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+    def __init__(self, base_url: str, model: str):
+        # Ensure base_url ends with /v1
+        if not base_url.endswith('/v1'):
+            base_url = base_url.rstrip('/') + '/v1'
+        
+        # For vLLM server, we don't need an API key, but the client requires one
+        self.client = openai.AsyncOpenAI(
+            api_key="EMPTY",  # Dummy API key for vLLM server
+            base_url=base_url
+        )
         self.model = model
+        logging.info(f"Initialized OpenAI client with base_url={base_url} and model={model}")
         self.loop = AsyncLoopWrapper.GetOrStartLoop()
         self.request_history = []
 
-    async def _async_launch_request(self, messages, max_tokens, extra_headers=None):
-        start_time = time.time()
-        first_token_time = None
-        words = ""
+    async def _async_launch_request(self, messages: List[Dict[str, str]],  max_tokens: int, 
+                                    extra_headers: Optional[Dict[str, str]] = None):
+        try:
+            logging.info(f"Sending request to model {self.model} with messages: {messages}")
+            
+            # Initialize response tracking variables
+            words = ""
+            tokens_out = 0
+            tokens_prefill = 0
+            start_time = time.time()
+            first_token_time = None
 
-        response = await self.client.chat.completions.create(
-            messages=messages,
-            model=self.model,
-            temperature=0,
-            stream=True,
-            max_tokens=max_tokens,
-            stream_options={"include_usage": True},
-            extra_headers=extra_headers,
-        )
+            # Make the request
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=True,
+                max_tokens=max_tokens,
+                stream_options={"include_usage": True},
+                extra_headers=extra_headers,
+            )
 
-        async for tok in response:
-            if not tok.choices:
-                continue
-            chunk_message = tok.choices[0].delta.content
-            if chunk_message is not None:
-                if first_token_time is None and chunk_message != "":
-                    first_token_time = time.time()
-                words += chunk_message
-        tokens_out = tok.usage.completion_tokens
-        tokens_prefill = tok.usage.prompt_tokens
+            # Process the streaming response
+            async for chunk in response:
+                if not chunk.choices:
+                    continue
+                    
+                # Handle content
+                if chunk.choices[0].delta.content is not None:
+                    if first_token_time is None:
+                        first_token_time = time.time()
+                    words += chunk.choices[0].delta.content
+                
+                # Handle token counts if available
+                if hasattr(chunk, 'usage') and chunk.usage is not None:
+                    tokens_out = chunk.usage.completion_tokens
+                    tokens_prefill = chunk.usage.prompt_tokens
 
-        return Response(
-            body=words,
-            ttft=first_token_time - start_time,
-            generation_time=time.time() - first_token_time,
-            prompt_tokens=tokens_prefill,
-            generation_tokens=tokens_out,
-            launch_time=start_time,
-            finish_time=time.time(),
-        )
+            # If we didn't get token counts from streaming, try to get them from the final response
+            if tokens_out == 0 or tokens_prefill == 0:
+                try:
+                    final_response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        stream=False,
+                    )
+                    if hasattr(final_response, 'usage') and final_response.usage is not None:
+                        tokens_out = final_response.usage.completion_tokens
+                        tokens_prefill = final_response.usage.prompt_tokens
+                except Exception as e:
+                    logging.warning(f"Failed to get token counts from final response: {e}")
+
+            # Calculate timing metrics
+            ttft = first_token_time - start_time if first_token_time else 0
+            generation_time = time.time() - first_token_time if first_token_time else 0
+
+            return Response(
+                body=words,
+                ttft=ttft,
+                generation_time=generation_time,
+                prompt_tokens=tokens_prefill,
+                generation_tokens=tokens_out,
+                launch_time=start_time,
+                finish_time=time.time(),
+            )
+
+        except Exception as e:
+            logging.error(f"Error in _async_launch_request: {str(e)}")
+            logging.error(f"Request details - model: {self.model}, messages: {messages}")
+            raise
 
     def launch_request(
         self,
@@ -390,6 +434,8 @@ class UserSessionManager:
         self.need_ramp_up = False
 
     def _create_user_session(self):
+        if len(self.sessions) >= self.workload_config.num_users:
+            return None
         self.user_id += 1
         user_config = UserConfig.new_user_config(self.user_id, self.workload_config)
         if self.use_sharegpt:
@@ -420,12 +466,13 @@ class UserSessionManager:
             self.start_time = timestamp
 
         if timestamp - self.last_user_join > self.gap_between_users:
-            self._create_user_session()
-            self.last_user_join = timestamp
-            logger.info(
-                f"Joined a new user {self.user_id}, "
-                f"now active users: {len(self.sessions)}"
-            )
+            new_session = self._create_user_session()
+            if new_session is not None:
+                self.last_user_join = timestamp
+                logger.info(
+                    f"Joined a new user {self.user_id}, "
+                    f"now active users: {len(self.sessions)}"
+                )
 
         for session in self.sessions:
             session.step(timestamp, executor)
@@ -579,13 +626,6 @@ def parse_arguments() -> WorkloadConfig:
     parser.add_argument("--qps", type=float, required=True, help="Overall QPS")
     parser.add_argument("--model", type=str, required=True, help="Model name")
     parser.add_argument(
-        "--api-key",
-        type=str,
-        required=False,
-        default="EMPTY",
-        help="Bearer token for authentication",
-    )
-    parser.add_argument(
         "--base-url",
         type=str,
         required=True,
@@ -610,17 +650,14 @@ def parse_arguments() -> WorkloadConfig:
     parser.add_argument(
         "--request-with-user-id",
         action="store_true",
-        help="Whether to enable user id in the request headers",
+        default=False,
+        help="Whether to include user id in request headers",
     )
     parser.add_argument(
         "--log-interval",
         type=int,
         default=30,
         help="The time between two summary loggings in seconds",
-    )
-
-    parser.add_argument(
-        "--verbose", action="store_true", help="Whether to enable verbose logging"
     )
     parser.add_argument(
         "--sharegpt", action="store_true", help="Whether to use ShareGPT dataset"
@@ -655,14 +692,10 @@ def main():
         return
 
     args = parse_arguments()
-    if args.verbose:
-        global logger
-        logger = init_logger(__name__, level=logging.DEBUG)
-
     step_interval = 0.1
 
     executor = RequestExecutor(
-        base_url=args.base_url, api_key=args.api_key, model=args.model
+        base_url=args.base_url, model=args.model
     )
 
     warmup_engine(executor)

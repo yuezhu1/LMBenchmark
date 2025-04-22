@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 MODEL=$1
 BASE_URL=$2
 
@@ -12,7 +15,7 @@ ANSWER_LEN=100 # Generation length per round
 
 warmup() {
     # Warm up the vLLM with a lot of user queries
-    python3 ./multi-round-qa.py \
+    python3 "${SCRIPT_DIR}/multi-round-qa.py" \
         --num-users 1 \
         --num-rounds 2 \
         --qps 2 \

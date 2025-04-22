@@ -1,69 +1,82 @@
 #!/bin/bash
 
-if [[ $# -ne 3 ]]; then
-    echo "Usage: $0 <model> <base url> <save file key>"
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+if [[ $# -lt 3 ]]; then
+    echo "Usage: $0 <model> <base url> <save file key> [qps_values...]"
+    echo "Example: $0 meta-llama/Llama-3.1-8B-Instruct http://localhost:8000 test 15 20 25"
     exit 1
 fi
 
 MODEL=$1
 BASE_URL=$2
-# Warmup: precompute KV and store inside CPU mem
-# CONFIGURATION
+KEY=$3
+
+# Configuration
 NUM_USERS_WARMUP=400
 NUM_USERS=320
 NUM_ROUNDS=20
+SYSTEM_PROMPT=0
+CHAT_HISTORY=256
+ANSWER_LEN=20
 
-SYSTEM_PROMPT=0 # Shared system prompt length
-CHAT_HISTORY=256 # User specific chat history length
-ANSWER_LEN=20 # Generation length per round
+# If QPS values are provided, use them; otherwise use default
+if [ $# -gt 3 ]; then
+    QPS_VALUES=("${@:4}")
+else
+    QPS_VALUES=(15)  # Default QPS value
+fi
+
+# init-user-id starts at 1, will add 400 each iteration
+INIT_USER_ID=1
 
 warmup() {
-    # Warm up the vLLM with a lot of user queries
-    python3 ./multi-round-qa.py \
+    echo "Warming up with QPS=$((NUM_USERS_WARMUP / 2))..."
+    python3 "${SCRIPT_DIR}/multi-round-qa.py" \
         --num-users 1 \
         --num-rounds 2 \
         --qps 2 \
-        --shared-system-prompt $SYSTEM_PROMPT \
-        --user-history-prompt $CHAT_HISTORY \
+        --shared-system-prompt "$(echo -n "$SYSTEM_PROMPT" | wc -w)" \
+        --user-history-prompt "$(echo -n "$CHAT_HISTORY" | wc -w)" \
         --answer-len $ANSWER_LEN \
         --model "$MODEL" \
         --base-url "$BASE_URL" \
+        --init-user-id "$INIT_USER_ID" \
         --output /tmp/warmup.csv \
         --log-interval 30 \
         --time $((NUM_USERS_WARMUP / 2))
 }
 
 run_benchmark() {
+    local qps=$1
+    local output_file="${KEY}_qps${qps}.csv"
 
+    # warmup with current init ID
     warmup
-
-    # $1: qps
-    # $2: output file
-
-    # Real run
-    python3 ./multi-round-qa.py \
-        --num-users $NUM_USERS \
-        --num-rounds $NUM_ROUNDS \
-        --qps "$1" \
-        --shared-system-prompt "$SYSTEM_PROMPT" \
-        --user-history-prompt "$CHAT_HISTORY" \
-        --answer-len $ANSWER_LEN \
+    
+    # actual benchmark with same init ID
+    echo "Running benchmark with QPS=$qps..."
+    python3 "${SCRIPT_DIR}/multi-round-qa.py" \
+        --num-users "$NUM_USERS" \
+        --shared-system-prompt "$(echo -n "$SYSTEM_PROMPT" | wc -w)" \
+        --user-history-prompt "$(echo -n "$CHAT_HISTORY" | wc -w)" \
+        --answer-len "$ANSWER_LEN" \
+        --num-rounds "$NUM_ROUNDS" \
+        --qps "$qps" \
         --model "$MODEL" \
         --base-url "$BASE_URL" \
-        --output "$2" \
-        --log-interval 30 \
-        --time 100
-
+        --init-user-id "$INIT_USER_ID" \
+        --output "$output_file" \
+        --time 60
+    
     sleep 10
+
+    # increment init-user-id by NUM_USERS_WARMUP
+    INIT_USER_ID=$(( INIT_USER_ID + NUM_USERS_WARMUP ))
 }
 
-KEY=$3
-
-# Run benchmarks for different QPS values
-QPS_VALUES=(15) # Set your QPS values here
-
-# Run benchmarks for the determined QPS values
+# Run benchmarks for each QPS value
 for qps in "${QPS_VALUES[@]}"; do
-    output_file="${KEY}_output_${qps}.csv"
-    run_benchmark "$qps" "$output_file"
+    run_benchmark "$qps"
 done

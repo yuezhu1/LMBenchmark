@@ -1,59 +1,70 @@
-# Benchmarking vLLM Production Stack Performance with multi-round QA
+# Synthetic Multi-Round QA Benchmark
 
-## Overview
+This benchmark tool generates synthetic multi-round conversations and measures the performance of LLM serving systems.
 
-This repository contains benchmarking tools for evaluating vLLM Production Stack's performance (e.g., latency, throughput). The initial focus of this benchmark is on the multi-round QA (Question Answering) use case. The script `multi-round-qa.py` simulates multiple users interacting with a language model concurrently for multiple rounds, allowing you to analyze the serving engine's throughput and latency.
+## Configuration
 
-The overall workflow of this script is shown below ![Illustration](multi-round.png)
+The benchmark supports two main scenarios:
 
-## Setup
+1. **Short Input, Short Output**
+   - System prompt: 0 tokens
+   - Chat history: 256 tokens
+   - Answer length: 20 tokens
+   - Default QPS: 15
 
-Installing the required packages needed to run the benchmark by:
+2. **Long Input, Short Output**
+   - System prompt: 1000 tokens
+   - Chat history: 20000 tokens
+   - Answer length: 100 tokens
+   - Default QPS: 0.1
 
-```bash
-pip install -r requirements.txt
-```
+## Running the Benchmark
 
-## Running benchmarks
-
-To run the short input short output benchmark, modify the `QPS` in `short_input_short_output.sh` and use the following example command. We tested on 2xA100 (80GB) GPUs.
-
-```bash
-bash short_input_short_output.sh meta-llama/Llama-3.1-70B-Instruct http://localhost:30080/v1/ stack
-```
-
-To run the long input short output benchmark, modify the `QPS` in `long_input_short_output_run.sh` and use the following example command. We tested on 1xA100 (40GB) GPU.
+### Short Input, Short Output
 
 ```bash
-bash long_input_short_output_warmup.sh meta-llama/Llama-3.1-8B-Instruct http://localhost:30080/v1/
-bash long_input_short_output_run.sh meta-llama/Llama-3.1-8B-Instruct http://localhost:30080/v1/ stack
+# Run with default QPS (15)
+./short_input_short_output.sh <model> <base_url> <save_file_key>
+
+# Run with multiple QPS values
+./short_input_short_output.sh <model> <base_url> <save_file_key> 15 20 25
 ```
 
-> **Note**: The above command requires there is a serving engine with the model served locally at ``http://localhost:30080/v1``. Here's an example command to launch the serving engine with vLLM Production Stack:
-> 
-> ```bash
-> helm repo add vllm https://vllm-project.github.io/production-stack
-> helm install vllm vllm/vllm-stack -f <YOUR STACK.YAML>
-> ```
-> 
-> And then do port-forwarding with the following command:
-> 
-> ```bash
-> kubectl port-forward svc/vllm-router-service 30080:80
-> ```
-
-> **Note**: The warm‑up phase of both benchmarks exists solely to preload the **user-specific chatting history** of all users in the tested session.
-
-## Processing results
-
-To get the average TTFT:
+### Long Input, Short Output
 
 ```bash
-python3 multi-round-qa.py --process-summary <YOUR CSV>
+# Run with default QPS (0.1)
+./long_input_short_output_run.sh <model> <base_url> <save_file_key>
+
+# Run with multiple QPS values
+./long_input_short_output_run.sh <model> <base_url> <save_file_key> 0.1 0.2 0.3
 ```
 
-To get the average ITL, change the file name in `calculat_itl.py` and run:
+### Warm-up Phase
+
+For the long input scenario, you can run a warm-up phase separately:
+
+```bash
+./long_input_short_output_warmup.sh <model> <base_url>
+```
+
+## Processing Results
+
+To calculate the average TTFT (Time To First Token):
+
+```bash
+python3 multi-round-qa.py --process-summary <your_csv_file>
+```
+
+To calculate the average ITL (Inter-Token Latency):
 
 ```bash
 python3 calculat_itl.py
 ```
+
+## Notes
+
+- The warm-up phase preloads the KV cache for better performance measurement
+- The benchmark automatically handles the correct script paths regardless of where it's run from
+- QPS values can be customized through command-line arguments
+- Results are saved in CSV format with the QPS value in the filename

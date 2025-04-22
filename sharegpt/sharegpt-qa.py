@@ -44,6 +44,8 @@ def parse_args() -> argparse.Namespace:
                         help="Output CSV filename (default: %(default)s)")
     parser.add_argument("--log-interval", type=int, default=30,
                         help="Seconds between progress logs (default: %(default)s)")
+    parser.add_argument("--time", type=int,
+                        help="Maximum time to run the benchmark in seconds")
     parser.add_argument("--verbose", action="store_true",
                         help="Enable DEBUG logging")
     return parser.parse_args()
@@ -67,6 +69,9 @@ class RequestExecutor:
     """Thin wrapper over OpenAI async client that measures latency."""
 
     def __init__(self, base_url: str, api_key: str, model: str):
+        # Ensure base_url ends with /v1 for vLLM
+        if not base_url.endswith('/v1'):
+            base_url = base_url.rstrip('/') + '/v1'
         self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.loop = AsyncLoopWrapper.GetOrStartLoop()
@@ -76,34 +81,38 @@ class RequestExecutor:
         first_token: Optional[float] = None
         body = ""
 
-        stream = await self.client.chat.completions.create(
-            messages=messages,
-            model=self.model,
-            temperature=0,
-            stream=True,
-            max_tokens=max_tokens,
-            stream_options={"include_usage": True},
-        )
+        try:
+            stream = await self.client.chat.completions.create(
+                messages=messages,
+                model=self.model,
+                temperature=0,
+                stream=True,
+                max_tokens=max_tokens,
+                stream_options={"include_usage": True},
+            )
 
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta.content
-            if delta:
-                if first_token is None:
-                    first_token = time.time()
-                body += delta
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    if first_token is None:
+                        first_token = time.time()
+                    body += delta
 
-        usage = chunk.usage  # type: ignore[attr-defined]
-        return Response(
-            body=body,
-            ttft=(first_token or time.time()) - start,
-            generation_time=time.time() - (first_token or start),
-            prompt_tokens=usage.prompt_tokens,
-            generation_tokens=usage.completion_tokens,
-            launch_time=start,
-            finish_time=time.time(),
-        )
+            usage = chunk.usage  # type: ignore[attr-defined]
+            return Response(
+                body=body,
+                ttft=(first_token or time.time()) - start,
+                generation_time=time.time() - (first_token or start),
+                prompt_tokens=usage.prompt_tokens,
+                generation_tokens=usage.completion_tokens,
+                launch_time=start,
+                finish_time=time.time(),
+            )
+        except Exception as e:
+            logger.error(f"Error in request: {str(e)}")
+            raise
 
     def launch_request(self, prompt: str, max_tokens: int, on_finish) -> None:
         messages = [{"role": "user", "content": prompt}]
@@ -118,22 +127,28 @@ class RequestExecutor:
 class BenchmarkRunner:
     """Dispatch prompts at desired QPS and collect latency metrics."""
 
-    def __init__(self, prompts: List[dict], executor: RequestExecutor, qps: float):
+    def __init__(self, prompts: List[dict], executor: RequestExecutor, qps: float, time_limit: Optional[int] = None):
         self.prompts = prompts
         self.executor = executor
         self.qps = qps
+        self.time_limit = time_limit
         self.results: List[Response] = []
         self._next_idx = 0
+        self.start_time = time.time()
 
     def _on_finish(self, resp: Response):
         self.results.append(resp)
 
     def run(self) -> pd.DataFrame:
-        start = time.time()
         logger.info("Benchmark started: %d prompts at %.2f QPS", len(self.prompts), self.qps)
 
         while self._next_idx < len(self.prompts):
-            scheduled = start + self._next_idx / self.qps
+            # Check time limit
+            if self.time_limit is not None and time.time() - self.start_time > self.time_limit:
+                logger.info(f"Time limit of {self.time_limit} seconds reached, stopping benchmark")
+                break
+
+            scheduled = self.start_time + self._next_idx / self.qps
             if time.time() < scheduled:
                 time.sleep(0.001)
                 continue
@@ -178,20 +193,31 @@ def log_summary(df: pd.DataFrame):
 def main():
     args = parse_args()
     if args.verbose:
-        init_logger(__name__, logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
 
-    with open(args.sharegpt_file, "r", encoding="utf-8") as fp:
-        data = json.load(fp)
-    logger.info("Loaded %d ShareGPT entries", len(data))
+    try:
+        # Load prompts
+        with open(args.sharegpt_file, "r") as f:
+            prompts = json.load(f)
+        logger.info(f"Loaded {len(prompts)} ShareGPT entries")
 
-    executor = RequestExecutor(base_url=args.base_url, api_key="EMPTY", model=args.model)
-    df = BenchmarkRunner(data, executor, args.qps).run()
+        # Initialize executor
+        executor = RequestExecutor(args.base_url, "EMPTY", args.model)
 
-    df.to_csv(args.output, index=False)
-    logger.info("Results written to %s", args.output)
-    log_summary(df)
+        # Run benchmark
+        runner = BenchmarkRunner(prompts, executor, args.qps, args.time)
+        df = runner.run()
+        
+        # Write results
+        df.to_csv(args.output, index=False)
+        logger.info(f"Results written to {args.output}")
 
-    AsyncLoopWrapper.StopLoop()  # ensure script terminates
+        # Log summary
+        log_summary(df)
+    finally:
+        # Always stop the asyncio loop
+        AsyncLoopWrapper.StopLoop()
+        logger.info("Benchmark completed and asyncio loop stopped")
 
 if __name__ == "__main__":
     main()

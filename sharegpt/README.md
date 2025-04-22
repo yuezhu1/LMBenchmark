@@ -8,10 +8,14 @@ You can specify the number of users to include, exclude users with fewer than a 
     ```
 
 2. **Run the round‑robin workload against your LLM**
-Each filtered user will submit their questions in turn. Modify the `QPS` in `run.sh`. We tested on 2xA100 (80GB) GPUs.
+Each filtered user will submit their questions in turn. You can specify one or more QPS values to test. If no QPS values are provided, it defaults to 1.34 QPS. We tested on 2xA100 (80GB) GPUs.
 
     ```bash
+    # Run with default QPS (1.34)
     bash run.sh meta-llama/Llama-3.1-70B-Instruct http://localhost:30080/v1/ stack
+
+    # Run with multiple QPS values
+    bash run.sh meta-llama/Llama-3.1-70B-Instruct http://localhost:30080/v1/ stack 1.34 2.0 3.0
     ```
 
 > **Note**: The above command requires there is a serving engine with the model served locally at ``http://localhost:30080/v1``. Here's an example command to launch the serving engine with vLLM Production Stack:
