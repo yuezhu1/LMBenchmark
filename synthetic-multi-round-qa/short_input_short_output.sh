@@ -69,6 +69,11 @@ run_benchmark() {
         --init-user-id "$INIT_USER_ID" \
         --output "$output_file" \
         --time 60
+    
+    sleep 10
+
+    # increment init-user-id by NUM_USERS_WARMUP
+    INIT_USER_ID=$(( INIT_USER_ID + NUM_USERS_WARMUP ))
 }
 
 # Run benchmarks for each QPS value
