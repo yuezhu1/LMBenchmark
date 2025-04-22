@@ -14,11 +14,12 @@ BASE_URL=$2
 KEY=$3
 
 # Configuration
-NUM_USERS=10
-NUM_ROUNDS=5
-SYSTEM_PROMPT="You are a helpful assistant."
-CHAT_HISTORY=""
-ANSWER_LEN=100
+NUM_USERS_WARMUP=400
+NUM_USERS=320
+NUM_ROUNDS=20
+SYSTEM_PROMPT=0
+CHAT_HISTORY=256
+ANSWER_LEN=20
 
 # If QPS values are provided, use them; otherwise use default
 if [ $# -gt 3 ]; then
@@ -27,10 +28,34 @@ else
     QPS_VALUES=(15)  # Default QPS value
 fi
 
+# init-user-id starts at 1, will add 400 each iteration
+INIT_USER_ID=1
+
+warmup() {
+    echo "Warming up with QPS=$((NUM_USERS_WARMUP / 2))..."
+    python3 "${SCRIPT_DIR}/multi-round-qa.py" \
+        --num-users 1 \
+        --num-rounds 2 \
+        --qps 2 \
+        --shared-system-prompt "$(echo -n "$SYSTEM_PROMPT" | wc -w)" \
+        --user-history-prompt "$(echo -n "$CHAT_HISTORY" | wc -w)" \
+        --answer-len $ANSWER_LEN \
+        --model "$MODEL" \
+        --base-url "$BASE_URL" \
+        --init-user-id "$INIT_USER_ID" \
+        --output /tmp/warmup.csv \
+        --log-interval 30 \
+        --time $((NUM_USERS_WARMUP / 2))
+}
+
 run_benchmark() {
     local qps=$1
     local output_file="${KEY}_qps${qps}.csv"
+
+    # warmup with current init ID
+    warmup
     
+    # actual benchmark with same init ID
     echo "Running benchmark with QPS=$qps..."
     python3 "${SCRIPT_DIR}/multi-round-qa.py" \
         --num-users "$NUM_USERS" \
@@ -41,6 +66,7 @@ run_benchmark() {
         --qps "$qps" \
         --model "$MODEL" \
         --base-url "$BASE_URL" \
+        --init-user-id "$INIT_USER_ID" \
         --output "$output_file" \
         --time 60
 }

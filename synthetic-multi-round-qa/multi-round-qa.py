@@ -131,7 +131,8 @@ class RequestExecutor:
         self.loop = AsyncLoopWrapper.GetOrStartLoop()
         self.request_history = []
 
-    async def _async_launch_request(self, messages: List[Dict[str, str]]) -> Dict:
+    async def _async_launch_request(self, messages: List[Dict[str, str]],  max_tokens: int, 
+                                    extra_headers: Optional[Dict[str, str]] = None):
         try:
             logging.info(f"Sending request to model {self.model} with messages: {messages}")
             
@@ -147,6 +148,9 @@ class RequestExecutor:
                 model=self.model,
                 messages=messages,
                 stream=True,
+                max_tokens=max_tokens,
+                stream_options={"include_usage": True},
+                extra_headers=extra_headers,
             )
 
             # Process the streaming response
@@ -211,7 +215,7 @@ class RequestExecutor:
         messages = chat_history.get_messages_for_openai()
         real_callback = lambda x: finish_callback(x.result())
         future = asyncio.run_coroutine_threadsafe(
-            self._async_launch_request(messages), self.loop
+            self._async_launch_request(messages, max_tokens, extra_headers), self.loop
         )
         future.add_done_callback(real_callback)
 
