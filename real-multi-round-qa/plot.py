@@ -1,89 +1,108 @@
+#!/usr/bin/env python3
 import os
-import json
 import glob
+import json
 import argparse
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+from matplotlib import ticker
 
 def main():
-    parser = argparse.ArgumentParser(description="Analyze number of user sessions from benchmark results.")
+    parser = argparse.ArgumentParser(
+        description="Visualize TTFT_95 across (C,S) without interpolation."
+    )
     parser.add_argument("input_dir", help="Directory containing JSON files")
-    parser.add_argument("output", help="Output path for the 3D bar plot image")
+    parser.add_argument("output",    help="Output image path")
     args = parser.parse_args()
 
-    json_files = glob.glob(f"{args.input_dir}/*.json")
-    all_params = []
     summary_records = []
+    fixed_params_seen = []
 
-    for file in json_files:
-        with open(file, 'r') as f:
+    for path in glob.glob(os.path.join(args.input_dir, "*.json")):
+        with open(path) as f:
             data = json.load(f)
-            if "params" not in data or "results" not in data:
-                print(f"Skipping {file}: missing 'params' or 'results'")
-                continue
-            params = data["params"]
-            results = data["results"]
+        if "params" not in data or "results" not in data:
+            print(f"Skip {path}: missing section")
+            continue
 
-            params_fixed = {k: v for k, v in params.items()
-                            if k not in ["num_users_concurrent", "num_users_sequential", "output"]}
-            all_params.append(params_fixed)
+        p   = data["params"]
+        res = pd.DataFrame(data["results"])
+        res = res[res["turn"] != 0]          # pre-fill を除外
+        if res.empty:
+            continue
 
-            df = pd.DataFrame(results)
-            df = df[df["turn"] != 0]
-            if df.empty:
-                continue
+        summary_records.append({
+            "c"       : p["concurrent"],
+            "s"       : p["session_depth"],
+            "ttft_95" : res["ttft"].quantile(0.95),
+        })
+        fixed_params_seen.append({k:v for k,v in p.items()
+                                  if k not in ("concurrent","session_depth","output")})
 
-            ttft_95 = df["ttft"].quantile(0.95)
-            summary_records.append({
-                "num_users_concurrent": params["num_users_concurrent"],
-                "num_users_sequential": params["num_users_sequential"],
-                "ttft_95": ttft_95
-            })
-
-    if all_params:
-        first_params = all_params[0]
-        assert all(p == first_params for p in all_params), "Inconsistent fixed parameters"
-
-    summary_df = pd.DataFrame(summary_records)
-    print(summary_df)
-
-    if summary_df.empty:
-        print("No valid TTFT data to visualize.")
+    if not summary_records:
+        print("No valid data")
         return
+    if any(fp != fixed_params_seen[0] for fp in fixed_params_seen):
+        raise ValueError("Inconsistent fixed parameters across files")
 
-    summary_df_sorted = summary_df.sort_values(by=['num_users_concurrent', 'num_users_sequential'])
+    df = pd.DataFrame(summary_records)
+    print(df)
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    grid = df.pivot(index="s", columns="c", values="ttft_95").sort_index(ascending=True)
+    S_vals = grid.index.values
+    C_vals = grid.columns.values
+    Z      = np.ma.masked_invalid(grid.values)
 
-    x = summary_df_sorted['num_users_concurrent']
-    y = summary_df_sorted['num_users_sequential']
-    z = np.zeros_like(x)
-    dz = summary_df_sorted['ttft_95']
+    fig, ax = plt.subplots(figsize=(9, 7))
 
-    colors = ['blue' if v <= 2 else 'red' for v in dz]
+    pcm = ax.pcolormesh(
+        C_vals,
+        S_vals,
+        Z,
+        shading="nearest",
+        cmap="plasma",
+        norm=LogNorm(vmin=0.01, vmax=100),
+    )
 
-    ax.bar3d(x, y, z, dx=0.5, dy=0.5, dz=dz, color=colors, shade=True)
-    ax.set_xlabel('Concurrent Users (C)')
-    ax.set_ylabel('Sequential Users (S)')
-    ax.set_zlabel('95% Tail TTFT (s)')
-    plt.title('TTFT 95% Tail vs Concurrent/Sequential Users')
-    ax.invert_xaxis()
-    plt.savefig(args.output)
+    cbar = fig.colorbar(pcm, ax=ax)
+    cbar.set_label("TTFT_95 (s)")
+    cbar.set_ticks([0.01, 0.1, 1, 2, 4, 8, 16, 32, 64, 100])
+    cbar.ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2g"))
 
-    # Max harmonic mean under 2s TTFT
-    summary_under_2s = summary_df[summary_df["ttft_95"] <= 2].copy()
-    if not summary_under_2s.empty:
-        summary_under_2s["harmonic_mean"] = 2 * summary_under_2s["num_users_concurrent"] * summary_under_2s["num_users_sequential"] / (
-            summary_under_2s["num_users_concurrent"] + summary_under_2s["num_users_sequential"]
-        )
-        best_row = summary_under_2s.sort_values("harmonic_mean", ascending=False).iloc[0]
-        product = best_row["num_users_concurrent"] * best_row["num_users_sequential"]
-        print(f"Max harmonic mean (C,S) where TTFT_95 <= 2s: {best_row['harmonic_mean']:.2f}")
-        print(f"  => C={best_row['num_users_concurrent']}, S={best_row['num_users_sequential']}, CxS={product}")
-    else:
-        print("No data points with TTFT_95 <= 2s.")
+    C_mesh, S_mesh = np.meshgrid(C_vals, S_vals)
+    ax.contour(
+        C_mesh, S_mesh, Z,
+        levels=[2.0],
+        colors="white",
+        linewidths=2,
+        linestyles="dashed",
+    )
+
+    ax.scatter(df["c"], df["s"], s=40, c="black", marker="o", label="measured")
+
+    ax.set_xlabel("Concurrent (C)")
+    ax.set_ylabel("Session Depth (S)")
+    ax.set_title("TTFT_95 Heatmap across (C, S) — no interpolation")
+    ax.set_xticks(C_vals)
+    ax.set_yticks(S_vals)
+    ax.grid(True, which="both", linestyle="--", alpha=0.3)
+    ax.legend(loc="upper right")
+
+    ok = df[df["ttft_95"] <= 2.0].copy()
+    if not ok.empty:
+        ok["hmean"] = 2 * ok["c"] * ok["s"] / (ok["c"] + ok["s"])
+        best = ok.loc[ok["hmean"].idxmax()]
+        ax.scatter(best["c"], best["s"],
+                   s=160, c="cyan", edgecolors="black", marker="*", label="Best (C,S)")
+        print(f"Best (C,S) with TTFT_95 ≤ 2 s → C={best.c}, S={best.s}, "
+              f"HarmonicMean={best.hmean:.2f}, C×S={best.c*best.s}")
+        ax.legend(loc="upper right")
+
+    fig.tight_layout()
+    fig.savefig(args.output)
+    print(f"Saved: {args.output}")
 
 if __name__ == "__main__":
     main()
