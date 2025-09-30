@@ -505,8 +505,9 @@ class UserSessionManager:
 
         if self.start_time is None:
             self.start_time = timestamp
-
-        if timestamp - self.last_user_join > self.gap_between_users:
+        
+        # New user session only joins when meets time interval and active user count is less than configured
+        if timestamp - self.last_user_join > self.gap_between_users and len(self.sessions) < self.workload_config.num_users:
             new_session = self._create_user_session()
             if new_session is not None:
                 self.last_user_join = timestamp
